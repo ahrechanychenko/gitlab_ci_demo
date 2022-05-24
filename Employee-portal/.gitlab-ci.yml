@@ -97,3 +97,55 @@ deploy_prod:
  rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
+deploy_feature:
+  image: docker:latest
+  stage: deploy feature
+  on_stop: stop_feature
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    url: $deployment_prod_url
+  before_script:
+    - echo PORT_NUMBER=$RANDOM > docker.env
+  script:
+    - source docker.env
+    - docker run -d --name=employee-portal-$CI_COMMIT_SHORT_SHA -p $PORT_NUMBER:80 $dockerhub_login/employee-image:$CI_COMMIT_SHORT_SHA
+  tags:
+    - ubuntu-vm
+  artifacts:
+    paths:
+      - docker.env
+  only:
+    - /^feature-.*$/
+
+stop_feature:
+  image: docker:latest
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: stop
+  stage: deploy feature
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - source docker.env
+    - docker rm --force employee-portal-$CI_COMMIT_SHORT_SHA
+  tags:
+    - ubuntu-vm
+  when: manual
+
+feature_testing:
+  image: google/cloud-sdk:alpine
+  stage: feature test
+  before_script:
+    - apk --no-cache add curl
+    - echo $service_account_json > key.json
+    - gcloud auth activate-service-account terraform-service-account@ahre-rnd.iam.gserviceaccount.com  --key-file=./key.json
+    - gcloud compute firewall-rules create "application-$CI_COMMIT_SHORT_SHA" --allow=tcp:$PORT_NUMBER --source-ranges="35.184.238.93/32,195.160.232.141/32" --description="dynamic firewall rule"
+  script:
+    - source docker.env
+    - curl -s $deployment_url:$PORT_NUMBER
+  tags:
+    - docker
+  dependencies:
+    - deploy_feature
+  only:
+    - /^feature-.*$/
